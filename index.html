@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zed Inverter Monitor</title>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; background: #121212; color: #fff; margin: 0; padding: 20px; }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: #00e676; margin-left: 8px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-top: 20px; }
+    .card { background: #1e1e1e; padding: 20px; border-radius: 12px; border: 1px solid #333; }
+    .label { color: #aaa; font-size: 0.9em; }
+    .val { font-size: 1.8em; font-weight: bold; color: #00e676; margin-top: 8px; }
+    .chart-container { background: #1e1e1e; padding: 20px; border-radius: 12px; border: 1px solid #333; margin-top: 20px; }
+  </style>
+</head>
+<body>
+
+  <h2>Zed Inverter Live Telemetry <span class="status-dot"></span></h2>
+
+  <div class="grid">
+    <div class="card">
+      <div class="label">Device ID</div>
+      <div class="val" id="dev-id">--</div>
+    </div>
+    <div class="card">
+      <div class="label">Inverter Power</div>
+      <div class="val" id="inv-pwr">-- W</div>
+    </div>
+    <div class="card">
+      <div class="label">Imported Energy</div>
+      <div class="val" id="imp-e">-- kWh</div>
+    </div>
+    <div class="card">
+      <div class="label">Last Sync</div>
+      <div class="val" style="font-size: 1em;" id="ts">--</div>
+    </div>
+  </div>
+
+  <div class="chart-container">
+    <canvas id="powerChart"></canvas>
+  </div>
+
+  <script>
+    // Initialize Firebase Realtime Database
+    const firebaseConfig = {
+      databaseURL: "https://zed-firebase-backend-default-rtdb.firebaseio.com/"
+    };
+    firebase.initializeApp(firebaseConfig);
+
+    // Chart Setup
+    const ctx = document.getElementById('powerChart').getContext('2d');
+    const chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'Power (Watts)',
+          data: [],
+          borderColor: '#00e676',
+          backgroundColor: 'rgba(0, 230, 118, 0.1)',
+          fill: true,
+          tension: 0.3
+        }]
+      },
+      options: {
+        responsive: true,
+        scales: {
+          x: { ticks: { color: '#aaa' }, grid: { color: '#333' } },
+          y: { ticks: { color: '#aaa' }, grid: { color: '#333' } }
+        },
+        plugins: { legend: { labels: { color: '#fff' } } }
+      }
+    });
+
+    // Listen to live updates from Firebase
+    const dbRef = firebase.database().ref('telemetry');
+    dbRef.on('value', (snapshot) => {
+      const data = snapshot.val();
+      if (!data) return;
+
+      document.getElementById('dev-id').innerText = data.DevID || '--';
+      document.getElementById('inv-pwr').innerText = (data.InvPwr !== undefined) ? `${data.InvPwr} W` : '-- W';
+      document.getElementById('imp-e').innerText = (data.ImpE !== undefined) ? `${data.ImpE} kWh` : '-- kWh';
+      document.getElementById('ts').innerText = data.TimeStamp || new Date().toLocaleTimeString();
+
+      if (data.InvPwr !== undefined) {
+        const timeLabel = data.TimeStamp ? data.TimeStamp.split(' ')[1] || data.TimeStamp : new Date().toLocaleTimeString();
+        chart.data.labels.push(timeLabel);
+        chart.data.datasets[0].data.push(data.InvPwr);
+
+        // Keep last 15 readings on screen
+        if (chart.data.labels.length > 15) {
+          chart.data.labels.shift();
+          chart.data.datasets[0].data.shift();
+        }
+        chart.update();
+      }
+    });
+  </script>
+</body>
+</html>
