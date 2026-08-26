@@ -3,69 +3,94 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Zed Inverter Monitor</title>
+  <title>Zed Inverter Control Center</title>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     body { font-family: system-ui, -apple-system, sans-serif; background: #121212; color: #fff; margin: 0; padding: 20px; }
     .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: #00e676; margin-left: 8px; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-top: 20px; }
+    
+    .controls { display: flex; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; background: #1e1e1e; padding: 16px; border-radius: 12px; border: 1px solid #333; }
+    .control-group { display: flex; flex-direction: column; gap: 4px; }
+    .control-group label { font-size: 0.8em; color: #aaa; text-transform: uppercase; font-weight: bold; }
+    select { background: #2a2a2a; color: #00e676; border: 1px solid #444; padding: 8px 12px; border-radius: 6px; font-weight: bold; font-size: 0.95em; outline: none; }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px; }
     .card { background: #1e1e1e; padding: 20px; border-radius: 12px; border: 1px solid #333; }
     .label { color: #aaa; font-size: 0.9em; }
     .val { font-size: 1.8em; font-weight: bold; color: #00e676; margin-top: 8px; }
-    .chart-container { background: #1e1e1e; padding: 20px; border-radius: 12px; border: 1px solid #333; margin-top: 20px; }
+    
+    .chart-container { background: #1e1e1e; padding: 20px; border-radius: 12px; border: 1px solid #333; margin-bottom: 20px; }
+    
+    .table-container { background: #1e1e1e; padding: 20px; border-radius: 12px; border: 1px solid #333; overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th { border-bottom: 2px solid #333; padding: 10px; color: #aaa; font-size: 0.85em; text-transform: uppercase; }
+    td { padding: 10px; border-bottom: 1px solid #222; }
+    tr:hover { background: #252525; }
+    .key-col { color: #00e676; font-family: monospace; font-weight: bold; }
   </style>
 </head>
 <body>
 
-  <h2>Zed Inverter Live Telemetry <span class="status-dot"></span></h2>
+  <h2>Zed Inverter Control Center <span class="status-dot"></span></h2>
 
-  <div class="grid">
-    <div class="card">
-      <div class="label">Device ID</div>
-      <div class="val" id="dev-id">--</div>
+  <!-- Device & Parameter Toolbar -->
+  <div class="controls">
+    <div class="control-group">
+      <label for="deviceSelect">Select Device ID</label>
+      <select id="deviceSelect" onchange="switchDevice()"></select>
     </div>
-    <div class="card">
-      <div class="label">Inverter Power</div>
-      <div class="val" id="inv-pwr">-- W</div>
-    </div>
-    <div class="card">
-      <div class="label">Imported Energy</div>
-      <div class="val" id="imp-e">-- kWh</div>
-    </div>
-    <div class="card">
-      <div class="label">Last Sync</div>
-      <div class="val" style="font-size: 1em;" id="ts">--</div>
+    <div class="control-group">
+      <label for="paramSelect">Chart Parameter</label>
+      <select id="paramSelect" onchange="resetChart()"></select>
     </div>
   </div>
 
+  <!-- Main Cards -->
+  <div class="grid">
+    <div class="card"><div class="label">Active Device</div><div class="val" id="dev-id">--</div></div>
+    <div class="card"><div class="label">Inverter Power</div><div class="val" id="inv-pwr">-- W</div></div>
+    <div class="card"><div class="label">Imported Energy</div><div class="val" id="imp-e">-- kWh</div></div>
+    <div class="card"><div class="label">Last Sync</div><div class="val" style="font-size: 1em;" id="ts">--</div></div>
+  </div>
+
+  <!-- Chart View -->
   <div class="chart-container">
-    <canvas id="powerChart"></canvas>
+    <canvas id="telemetryChart"></canvas>
+  </div>
+
+  <!-- All Telemetry Parameters Table -->
+  <div class="table-container">
+    <h3 style="margin-top:0; color:#aaa;">All Raw Telemetry Parameters</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Parameter Name</th>
+          <th>Live Value</th>
+        </tr>
+      </thead>
+      <tbody id="paramTableBody">
+        <tr><td colspan="2" style="color:#666;">Waiting for data payload...</td></tr>
+      </tbody>
+    </table>
   </div>
 
   <script>
-    // Initialize Firebase Realtime Database
-    const firebaseConfig = {
-      databaseURL: "https://zed-firebase-backend-default-rtdb.firebaseio.com/"
-    };
+    const firebaseConfig = { databaseURL: "https://zed-firebase-backend-default-rtdb.firebaseio.com/" };
     firebase.initializeApp(firebaseConfig);
 
+    let activeDevice = '';
+    let selectedParam = 'InvPwr';
+    let chart;
+    let availableKeys = new Set();
+    let currentListenerRef = null;
+
     // Chart Setup
-    const ctx = document.getElementById('powerChart').getContext('2d');
-    const chart = new Chart(ctx, {
+    const ctx = document.getElementById('telemetryChart').getContext('2d');
+    chart = new Chart(ctx, {
       type: 'line',
-      data: {
-        labels: [],
-        datasets: [{
-          label: 'Power (Watts)',
-          data: [],
-          borderColor: '#00e676',
-          backgroundColor: 'rgba(0, 230, 118, 0.1)',
-          fill: true,
-          tension: 0.3
-        }]
-      },
+      data: { labels: [], datasets: [{ label: 'InvPwr', data: [], borderColor: '#00e676', backgroundColor: 'rgba(0, 230, 118, 0.1)', fill: true, tension: 0.3 }] },
       options: {
         responsive: true,
         scales: {
@@ -76,30 +101,91 @@
       }
     });
 
-    // Listen to live updates from Firebase
-    const dbRef = firebase.database().ref('telemetry');
-    dbRef.on('value', (snapshot) => {
-      const data = snapshot.val();
-      if (!data) return;
+    // Populate Device List
+    firebase.database().ref('devices').on('value', (snapshot) => {
+      const devices = snapshot.val();
+      const select = document.getElementById('deviceSelect');
+      const prevVal = select.value;
+      select.innerHTML = '';
 
-      document.getElementById('dev-id').innerText = data.DevID || '--';
+      if (devices) {
+        Object.keys(devices).forEach(devId => {
+          const opt = document.createElement('option');
+          opt.value = devId;
+          opt.innerText = devId;
+          select.appendChild(opt);
+        });
+
+        if (prevVal && devices[prevVal]) {
+          select.value = prevVal;
+        } else if (select.options.length > 0) {
+          select.value = select.options[0].value;
+          switchDevice();
+        }
+      } else {
+        const opt = document.createElement('option');
+        opt.value = 'B48A0AB2B72C';
+        opt.innerText = 'B48A0AB2B72C (Default)';
+        select.appendChild(opt);
+        switchDevice();
+      }
+    });
+
+    function switchDevice() {
+      activeDevice = document.getElementById('deviceSelect').value;
+      if (currentListenerRef) currentListenerRef.off();
+
+      const path = activeDevice ? `devices/${activeDevice}` : 'telemetry';
+      currentListenerRef = firebase.database().ref(path);
+      currentListenerRef.on('value', (snapshot) => {
+        const data = snapshot.val();
+        if (data) processPayload(data);
+      });
+    }
+
+    function processPayload(data) {
+      document.getElementById('dev-id').innerText = data.DevID || activeDevice || '--';
       document.getElementById('inv-pwr').innerText = (data.InvPwr !== undefined) ? `${data.InvPwr} W` : '-- W';
       document.getElementById('imp-e').innerText = (data.ImpE !== undefined) ? `${data.ImpE} kWh` : '-- kWh';
       document.getElementById('ts').innerText = data.TimeStamp || new Date().toLocaleTimeString();
 
-      if (data.InvPwr !== undefined) {
-        const timeLabel = data.TimeStamp ? data.TimeStamp.split(' ')[1] || data.TimeStamp : new Date().toLocaleTimeString();
-        chart.data.labels.push(timeLabel);
-        chart.data.datasets[0].data.push(data.InvPwr);
+      const paramSelect = document.getElementById('paramSelect');
+      const tableBody = document.getElementById('paramTableBody');
+      tableBody.innerHTML = '';
 
-        // Keep last 15 readings on screen
-        if (chart.data.labels.length > 15) {
+      Object.keys(data).forEach(key => {
+        tableBody.innerHTML += `<tr><td class="key-col">${key}</td><td>${data[key]}</td></tr>`;
+
+        if (typeof data[key] === 'number' && !availableKeys.has(key)) {
+          availableKeys.add(key);
+          const opt = document.createElement('option');
+          opt.value = key;
+          opt.innerText = key;
+          paramSelect.appendChild(opt);
+        }
+      });
+
+      selectedParam = paramSelect.value || 'InvPwr';
+      if (data[selectedParam] !== undefined && typeof data[selectedParam] === 'number') {
+        const timeLabel = data.TimeStamp ? (data.TimeStamp.split(' ')[1] || data.TimeStamp) : new Date().toLocaleTimeString();
+        chart.data.labels.push(timeLabel);
+        chart.data.datasets[0].data.push(data[selectedParam]);
+
+        if (chart.data.labels.length > 20) {
           chart.data.labels.shift();
           chart.data.datasets[0].data.shift();
         }
         chart.update();
       }
-    });
+    }
+
+    function resetChart() {
+      selectedParam = document.getElementById('paramSelect').value;
+      chart.data.labels = [];
+      chart.data.datasets[0].data = [];
+      chart.data.datasets[0].label = selectedParam;
+      chart.update();
+    }
   </script>
 </body>
 </html>
